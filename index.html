@@ -262,7 +262,7 @@
                 if (score1 !== undefined && score2 !== undefined) {
                     return Math.abs(score1 - score2);
                 }
-                if (score1 !== undefined && revisionStage === '二改') {
+                if (score1 !== undefined && revisionStage === '二改' && scoreTouched.content && scoreTouched.language) {
                     return Math.abs(score1 - grandTotal);
                 }
                 return null;
@@ -272,13 +272,13 @@
             const isCrossBand = useMemo(() => {
                 if (!record1) return false;
                 const c1Band = getBandLevel('content', record1.content);
-                const c2Band = getBandLevel('content', revisionStage === '二改' ? contentTotal : (record2?.content || 0));
+                const c2Band = getBandLevel('content', revisionStage === '二改' && scoreTouched.content ? contentTotal : (record2?.content ?? record1.content));
                 
                 const l1Band = getBandLevel('language', record1.language);
-                const l2Band = getBandLevel('language', revisionStage === '二改' ? languageTotal : (record2?.language || 0));
+                const l2Band = getBandLevel('language', revisionStage === '二改' && scoreTouched.language ? languageTotal : (record2?.language ?? record1.language));
 
                 return (c1Band !== c2Band) || (l1Band !== l2Band);
-            }, [record1, record2, contentTotal, languageTotal, revisionStage]);
+            }, [record1, record2, contentTotal, languageTotal, revisionStage, scoreTouched]);
 
             // Final Score Calculation Logic according to Rules
             const finalScoreResolution = useMemo(() => {
@@ -291,9 +291,9 @@
                     };
                 }
 
-                const currentScore2 = revisionStage === '二改' ? grandTotal : (score2 !== undefined ? score2 : null);
-                const currentContent2 = revisionStage === '二改' ? contentTotal : (record2?.content !== undefined ? record2.content : null);
-                const currentLanguage2 = revisionStage === '二改' ? languageTotal : (record2?.language !== undefined ? record2.language : null);
+                const currentScore2 = revisionStage === '二改' && scoreTouched.content && scoreTouched.language ? grandTotal : (score2 !== undefined ? score2 : null);
+                const currentContent2 = revisionStage === '二改' && scoreTouched.content && scoreTouched.language ? contentTotal : (record2?.content !== undefined ? record2.content : null);
+                const currentLanguage2 = revisionStage === '二改' && scoreTouched.content && scoreTouched.language ? languageTotal : (record2?.language !== undefined ? record2.language : null);
 
                 if (currentScore2 === null) {
                     return { 
@@ -333,7 +333,7 @@
                     total: currentScore2, 
                     source: `二改 (两改分差 ${diff}分 > 3分，采用二改标准)` 
                 };
-            }, [record1, record2, score2, contentTotal, languageTotal, grandTotal, revisionStage, isCrossBand]);
+            }, [record1, record2, score2, contentTotal, languageTotal, grandTotal, revisionStage, isCrossBand, scoreTouched]);
 
             // Helper to match score with rubric feedback
             const getRubricFeedback = (category, targetScore) => {
@@ -383,6 +383,7 @@
             const handleStageChange = (newStage) => {
                 if (newStage === revisionStage) return;
                 setRevisionStage(newStage);
+                clearScores();
             };
 
             const clearScores = () => {
@@ -475,6 +476,19 @@
                 });
             };
 
+            // Load previously submitted marks from the shared Google Sheet (not local browser memory).
+            useEffect(() => {
+                if (!student.class || !student.mtl || !student.name) return;
+                let cancelled = false;
+                const url = `${gasUrl}?action=history&formClass=${encodeURIComponent(student.class)}&mtClass=${encodeURIComponent(student.mtl)}&studentName=${encodeURIComponent(student.name)}&_=${Date.now()}`;
+                fetch(url, {cache:'no-store'}).then(r => r.json()).then(data => {
+                    if (!cancelled && data.ok) {
+                        setStudentScoresHistory(prev => ({...prev, [student.name]: data.history || {}}));
+                    }
+                }).catch(err => console.warn('Unable to load marking history', err));
+                return () => { cancelled = true; };
+            }, [student.class, student.mtl, student.name]);
+
             const handleStudentSelect = (e) => {
                 const selectedName = e.target.value;
                 if (!selectedName) {
@@ -493,7 +507,7 @@
                         s.name === selectedName
                 );
 
-                if (found) setStudent(found);
+                if (found) { clearScores(); setStudent(found); }
             };
 
             const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -637,14 +651,18 @@
                             }
                         }
                     };
-                    setStudentScoresHistory(updatedHistory);
+                    setStudentScoresHistory(prev => ({
+                        ...prev,
+                        [student.name]: result.history || updatedHistory[student.name]
+                    }));
 
                     setDialog({
                         isOpen: true,
                         title: '✅ 提交成功！',
                         message:
                             `学生 ${student.name} 的 (${revisionStage}) 写作成绩已保存。\n` +
-                            `评卷老师：${currentExaminer}`,
+                            `评卷老师：${currentExaminer}\n` +
+                            `最终判定：${result.decision?.source || '请查看 Google Sheet'}`,
                         type: 'alert',
                         isSuccess: true
                     });
